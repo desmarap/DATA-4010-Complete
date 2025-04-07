@@ -1,0 +1,191 @@
+---
+title: "4010-RF"
+author: "Garik Avagyan, Ha, Uyen Tran, Patrick Desmarais"
+date: "2025-04-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Importing library
+library("lidR")
+library("rgl")
+library("data.table")
+library("foreign")
+library("FNN")
+library("sf")
+library("sp")
+library("dplyr")
+library("lwgeom")
+library("foreign")
+library("randomForest")
+library("caret")
+```
+
+## R Markdown
+
+
+
+```{r}
+# Importing dataset
+RGB_cloud_data <- readLAS("C:/4010/merged_with_ndvi.las")
+```
+
+```{r}
+las_veget<-filter_poi(RGB_cloud_data, ndvi > 0.5) # I changed the ndvi threshold from 0.4 to 0.5
+
+dtm<- rasterize_terrain(las_veget, res=1, algorithm = knnidw())
+
+# Watersheding 
+RGB_normalized<- normalize_height(las_veget, dtm)
+chm_1 <- rasterize_canopy(RGB_normalized, res = 0.5, algorithm = p2r())
+tree_segments_1 <- segment_trees(RGB_normalized, lidR::watershed(chm_1))
+
+# Need to convert to a double or else the function will throw out an error
+# Creating the variables for the polygons 
+tree_polygons <-  delineate_crowns(tree_segments_1, func = ~list(R = as.numeric(median(R)), 
+                                                                 G = as.numeric(median(G)),
+                                                                 B = as.numeric(median(B)),
+                                                                 nir = as.numeric(median(nir)),
+                                                                 r_multi = as.numeric(median(ms_red)),
+                                                                 g_multi = as.numeric(median(ms_green)),
+                                                                 b_multi = as.numeric(median(ms_blue)),
+                                                                 x_dist = as.numeric(max(X) - min(X)),
+                                                                 y_dist = as.numeric(max(Y) - min(Y)),
+                                                                 height = max(Z)
+                                                                 ))
+
+tree_polygons_sf <- st_as_sf(tree_polygons)
+st_write(tree_polygons_sf, "tree_crowns_from_segmentation.gpkg", delete_dsn = TRUE)
+
+plot(tree_polygons)
+
+```
+
+This step is removing all the folliage that is not trees we have a roundness metric added
+And an area metric to try and cut the objects that are to big to be trees and also the small
+objects
+
+```{r}
+polygon_df <- st_set_crs(tree_polygons_sf, 26914)
+
+polygon_df <- polygon_df %>% 
+  st_cast("POLYGON")
+
+# Calculate the roundness of each polygon 
+roundness <- polygon_df %>%
+  mutate(
+    area = st_area(geometry),
+    perimeter = sf::st_perimeter(geometry),
+    round = (4* pi * area) / (perimeter^2)
+  )
+
+roundness$round <- as.numeric(roundness$round)
+roundness$area <- as.numeric(roundness$area)
+
+roundness <- roundness[roundness$round > 0.7, ]
+roundness <- roundness[roundness$area > 1, ]
+roundness <- roundness[roundness$area < 700, ]
+
+roundness_st <- sf::as_Spatial(roundness$geometry)
+
+plot(roundness_st)
+```
+
+Merge the private tree coordinates with the polygons created in the last section.
+
+This will label the data. 
+
+Then we clean it even more by removing all the NA values and removing all the species that
+have less than 10 trees in the data set since it will be causing more error
+
+```{r}
+tree_coords <- read.dbf("C:/4010/UofM_tree_points2024_UTM14N.dbf")
+
+# Changing the coordinate system for the two datasets making them match
+tree_sf <- st_as_sf(tree_coords, coords = c("POINT_X", "POINT_Y"), crs = 4326)
+tree_sf <- st_transform(tree_sf, crs = 26914)
+tree_sf <- tree_sf[ , c("Species", "geometry")]
+roundness_sf <- st_as_sf(roundness, crs = 26914)
+
+labelled <- st_join(roundness_sf, tree_sf)
+
+# Checking if the polygons only has one species of tree
+clean_labelled <- labelled %>% 
+  group_by(treeID) %>%
+  summarise(
+    count = n(),
+    unique = n_distinct(Species)
+  )
+
+clean_labelled <- clean_labelled[clean_labelled$unique == 1, ]
+
+labelled$unique <- 0
+
+j = 1
+
+for(i in clean_labelled$treeID)
+{
+  labelled[labelled$treeID == i, "unique"] <- clean_labelled[j, "count"]
+  j <- j + 1
+}
+
+labelled <- labelled[labelled$unique > 0 ,]
+
+# adjusting the area if their is more than one tree of the same species in the polygon
+labelled[, "area"] <- labelled[, "area"]/labelled[, "unique"]
+
+labelled <- na.omit(labelled)
+
+# Find the tree species that do not have many data points in this case less than 10
+species_clean <- labelled %>% group_by(Species) %>% summarise(count = n())
+species_clean <- species_clean[species_clean$count < 10, ]
+species_clean <- st_drop_geometry(species_clean)
+species_clean <- species_clean %>% select(-count)
+
+# Remove all the species from the labelled data set
+labelled <- labelled %>%
+  filter(!labelled$Species %in% species_clean$Species)
+
+labelled <- labelled %>% select(-c(treeID, unique))
+```
+
+```{r}
+# Random Forest
+labelled_clean <- st_drop_geometry(labelled)
+labelled_clean <- labelled_clean %>% select(-perimeter)
+labelled_clean$Species <- as.factor(labelled_clean$Species)
+table(labelled_clean$Species)
+
+# Creating the training and testing sets with a 70/30 split
+indices <- sample(2, nrow(labelled_clean), replace = TRUE, prob = c(0.7, 0.3))
+train_set <- labelled_clean[indices == 1, ]
+test_set <- labelled_clean[indices == 2, ]
+
+train_set$Species <- factor(train_set$Species)
+test_set$Species <- factor(test_set$Species)
+
+rf <- randomForest(Species~., data = train_set, proximity = TRUE)
+
+prd <- predict(rf, train_set)
+confusionMatrix(prd, train_set$Species)
+
+prd2 <- predict(rf, test_set)
+confusionMatrix(prd2, test_set$Species)
+```
+
+```{r}
+#grid search 
+mtry <- sqrt(ncol(labelled))
+control <- trainControl(method =  "repeatedcv", number = 10, repeats = 3, search = "grid")
+tunegrid <- expand.grid(.mtry=c(1:15))
+grid_rf <- train(Species~., data = train_set, method = "rf", metric = "Accuracy", tuneGrid = tunegrid, trControl = control)
+
+print(grid_rf)
+```
+
+
+Importance of the variables
+```{r}
+varImpPlot(rf, sort = T, n.var = 15, main = "Variable importance")
+importance(rf)
+```

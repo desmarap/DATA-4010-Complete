@@ -1,0 +1,95 @@
+---
+title: "Data 4010 Test Segmentation"
+author: "Patrick Desmarais"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Importing library
+library("lidR")
+library("rgl")
+library("data.table")
+```
+
+```{r}
+# Importing cropped data 
+import <- readLAS("C:/4010/F_240717_1_RGBPC_cropped.las")
+treeDataset <- import@data
+```
+
+First we will do a regular K-means clustering which will also some what do segmentation.
+This first one will include the X and Y
+
+```{r}
+# Remove all the columns exept for the coordinates X, Y, and Z and the colours.
+cleanDataX <- treeDataset[, c("X", "Y", "Z", "R", "G", "B")]
+
+# We will have to normalize the data before inputting into the K-Means algorithm
+# We will use a min-max function
+minMax <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+normDataX <- as.data.frame(lapply(cleanDataX, minMax))
+
+# Now we create the k-means algorithm to split the trees, building, roads and grass
+kmDataX <- kmeans(normDataX, centers = 4)
+
+
+kmDataX$betweenss
+kmDataX$withinss
+
+```
+
+```{r}
+# Create a copy of the imported data
+copyX <- data.frame(treeDataset)
+
+# Merge the K-means cluster and the tree data
+newCopyX <- cbind(copyX, kmDataX$cluster)
+
+newCopyX <- setDT(newCopyX)
+
+import@data <- newCopyX
+
+plot(import, color = "kmDataX$cluster")
+```
+
+We can see that the k-means segmentation properly separated the buildings and road 
+from the trees however we split the trees into two different sections. We can also see
+that the algorithm had a hard time differentiating between grass and trees since we put the 
+importance of the X and Y values on the same level as the Z axis
+
+Next we will do another k-means however we will remove the X and Y coordinates
+```{r}
+cleanDataZ <- treeDataset[, c("Z", "R", "G", "B")]
+
+normDataZ <- as.data.frame(lapply(cleanDataZ, minMax))
+
+# Now we create the k-means algorithm to split the trees, building, roads and grass
+kmDataZ <- kmeans(normDataZ, centers = 4)
+
+
+kmDataZ$betweenss
+kmDataZ$withinss
+```
+
+```{r}
+# Create a copy of the imported data
+copyZ <- data.frame(treeDataset)
+
+# Merge the K-means cluster and the tree data
+newCopyZ <- cbind(copyZ, kmDataZ$cluster)
+
+newCopyZ <- setDT(newCopyZ)
+
+import@data <- newCopyZ
+
+plot(import, color = "kmDataZ$cluster")
+```
+
+After removing the X and Y values from the K-means algorithm we can see an improvement
+in differentiating between the grass and the trees. We can also see the canopy of the trees
+
