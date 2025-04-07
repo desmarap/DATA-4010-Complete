@@ -22,9 +22,9 @@
    - [QGIS](https://qgis.org/)
 
 5. **Run the Scripts**
-   - `Data4010-K-means.Rmd`: Performs K-means clustering on the RGB dataset.
-   - `MergedFile.py`: Merges `RGBPC.las` and `MSPC.las` into one dataset.
-   - `Data4010-RF.Rmd`: Performs segmentation and classification on the merged dataset.
+   - `Data4010-K-means.Rmd`: Performs K-means clustering on the RGB dataset (Done by Patrick Desmarais).
+   - `MergedFile.py`: Merges `RGBPC.las` and `MSPC.las` into one dataset (Done by Garik Avagyan).
+   - `Data4010-RF.Rmd`: Performs segmentation and classification on the merged dataset (Done by Garik Avagyan, Ha Uyen Tran, Patrick Desmarais).
 
 6. **Visualize the Results**
    - The output files created by `Data4010-RF.Rmd` can be opened and visualized using CloudCompare and QGIS.
