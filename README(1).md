@@ -1,4 +1,4 @@
-# Tree Point Cloud Segmentation and Classification
+# Inside the outside: Investigating urban canopy using point cloud
 
 ## How to Use
 
